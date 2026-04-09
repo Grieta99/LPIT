@@ -4,13 +4,10 @@ import time
 import os
 import sys
 import re
-import socket
 import argparse
 import configparser
 
-version = "1.00"
-
-str_bool = ['No', 'Yes']
+version = "1.01"
 
 # NOTES:
 # - \033[F = Moves the cursor up one line
@@ -39,7 +36,7 @@ def find_dt_pos(text):
 def main():
     
     out_log_file = "cu-lan-ho.log"
-    inp_log_file = os.path.join(".\- Data -", "cu-lan-ho.log")
+    inp_log_file = os.path.join("./Data", "cu-lan-ho.log")
 
     print("-------------------------")
     print("srsRAN log Simulator " + version)
@@ -58,7 +55,6 @@ def main():
     print("")
 
     # Command line arguments
-
     parser = argparse.ArgumentParser(description='log-parser-sim')
     parser.add_argument('-s', '--speed', help='Simulation speed (Default=1)', required=False, type=int, default=1)
 
@@ -83,16 +79,16 @@ def main():
 
         try:
 
-            while True:
+            len_input = rawgencount(inp_log_file)
+            print("- Input log file: " + inp_log_file + " (" + str(len_input) + " lines)")
+            print("")
 
-                len_input = rawgencount(inp_log_file)
-                print("- Input log file name: " + inp_log_path_file_full + " (" + str(len_input) + " lines)")
-                print("")
+            while True:
 
                 out_file.write("log-parser Simulator " + version + '\n')
                 out_file.write("Current datetime: " + datetime.now().isoformat() + '\n')
-                out_file.write("Input log file name: " + inp_log_file + '\n')
-                out_file.write("Output log file name: " + out_log_file + '\n')
+                out_file.write("Input log file: " + inp_log_file + '\n')
+                out_file.write("Output log file: " + out_log_file + '\n')
                 out_file.write("\n")
 
                 out_file.flush()
@@ -102,9 +98,11 @@ def main():
 
                 ic+=1  # Iterations counter
 
-                print("Iteration:", ic)
+                print("Iteration:", ic, "                           ")
                 # Open the input file for reading
-                with open(inp_log_path_file_full, 'r', encoding='utf-8') as inp_file:
+                with open(inp_log_file, 'r', encoding='utf-8') as inp_file:
+
+                    t_start = time.time()
 
                     lc = 0  # Lines counter
 
@@ -118,32 +116,30 @@ def main():
                             dt_iso = line[pos_dt[0][0]:pos_dt[0][1]]
                             dt_log = datetime.fromisoformat(dt_iso)
 
-                            # Initialize date-time references
+                            # Initialize date-time references (only once)
                             if not dt_ref_log:
+                                
                                 dt_ref_log = dt_log
-
                                 dt_ref_now = datetime.now()
 
                                 print("Reference log date-time:", dt_ref_log)
                                 print("Reference now date-time:", dt_ref_now)
 
-                            t_start = time.time()
+                            ellapsed_log = dt_log - dt_ref_log
 
                             # Synchronize lines generation with log time-stamps
                             while True:
+                                                                
                                 dt_now = datetime.now()
-
-                                t_current = time.time()
-
-                                log_ellapsed = dt_log - dt_ref_log
+                                
                                 ellapsed_now = dt_now - dt_ref_now
 
-                                if t_current - t_start > 1:
+                                if time.time() - t_start > 1:
 
                                     dt_sim = dt_ref_log + ellapsed_now
 
                                     sys.stdout.write(f'Line: {lc}          \n')
-                                    sys.stdout.write(f'- log ellapsed = {log_ellapsed}          \n')
+                                    sys.stdout.write(f'- log ellapsed = {ellapsed_log}          \n')
                                     sys.stdout.write(f'- now ellapsed = {ellapsed_now}          \n')
                                     sys.stdout.write(f'- now dt = {dt_now}          \n')
                                     sys.stdout.write(f'- sim dt = {dt_sim}          \n')
@@ -153,11 +149,12 @@ def main():
                                     sys.stdout.flush()
 
                                     t_start = time.time()
-
-                                if ellapsed_now >= log_ellapsed:
+                                    
+                                if ellapsed_now >= ellapsed_log:
                                     break
                                 else:
                                     time.sleep(0.01)
+                                    
 
                         lc+=1  # Line counter
 
