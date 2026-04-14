@@ -1,5 +1,4 @@
 from datetime import datetime
-from pathlib import Path
 
 import time
 import os
@@ -7,7 +6,7 @@ import sys
 import re
 import argparse
 
-version = "1.04"
+version = "1.05"
 
 # NOTES:
 # - \033[F = Moves the cursor up one line
