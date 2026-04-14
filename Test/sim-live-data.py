@@ -1,18 +1,8 @@
-from datetime import datetime
-
 import time
 import os
 import sys
 
-version = "1.01"
-
-def find_dt_pos(text):
-    pattern = r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}'
-
-    matches = re.finditer(pattern, text)
-    pos = [(match.start(), match.end()) for match in matches]
-
-    return pos
+version = "1.02"
 
 def main():
 
