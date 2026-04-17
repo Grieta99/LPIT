@@ -5,9 +5,8 @@ import os
 import sys
 import re
 import argparse
-import configparser
 
-version = "1.03"
+version = "1.05"
 
 # NOTES:
 # - \033[F = Moves the cursor up one line
@@ -22,7 +21,7 @@ def _make_gen(reader):
 
 def rawgencount(filename):
     f = open(filename, 'rb')
-    f_gen = _make_gen(f.raw.read)
+    f_gen = _make_gen(f.read)
     return sum(buf.count(b'\n') for buf in f_gen)
 
 def find_dt_pos(text):
@@ -35,22 +34,27 @@ def find_dt_pos(text):
 
 def main():
     
-    out_log_file = "cu-lan-ho.log"
-    inp_log_file = os.path.join("../Data", "cu-lan-ho.log")
+    out_log_file = "cu-lan-ho-live.log"
+    inp_log_file = os.path.join("cu-lan-ho.log")
 
     print("-------------------------")
     print("srsRAN log Simulator " + version)
     print("-------------------------")
     print("")
+    
+    user = os.getlogin()
 
     print("Environment:")
     if sys.platform == 'linux':
         print("- OS: Ubuntu")
     elif sys.platform == 'win32':
         print("- OS: Windows")
+    elif sys.platform == 'darwin':
+        print("- OS: MacOS")        
     else:
         print("- OS: unknown")
-        sys.exit()
+
+    print("- User:", user)
 
     print("")
 
@@ -66,11 +70,15 @@ def main():
     print("- Simulation speed:", sim_speed)
     print("")
 
-    user = os.getlogin()
+    if not os.path.exists(inp_log_file):
+        print("ERROR: File '" + inp_log_file + "' does not exist")
+        sys.exit()
+        
+    if os.path.getsize(inp_log_file) == 0:
+        print("ERROR: File '" + inp_log_file + "' is empty (size = 0 bytes)")   
+        sys.exit()
 
     key_int = False
-
-    comm_dt_log_ref = None
 
     ic = 0  # Iterations counter
 
@@ -94,8 +102,8 @@ def main():
 
                 out_file.flush()
 
-                dt_ref_log = None
-                dt_ref_now = None
+                first_time = True
+                dt_found = False
 
                 ic+=1  # Iterations counter
 
@@ -112,19 +120,23 @@ def main():
                         pos_dt = find_dt_pos(line)
 
                         if pos_dt:
+                            
+                            dt_found  = True
 
                             # Extract date-time (ISO 8601) from log line
                             dt_iso = line[pos_dt[0][0]:pos_dt[0][1]]
                             dt_log = datetime.fromisoformat(dt_iso)
 
                             # Initialize date-time references (only once)
-                            if not dt_ref_log:
+                            if first_time:
                                 
                                 dt_ref_log = dt_log
                                 dt_ref_now = datetime.now()
 
                                 print("Reference log date-time:", dt_ref_log)
                                 print("Reference now date-time:", dt_ref_now)
+
+                                first_time = False
 
                             ellapsed_log = dt_log - dt_ref_log
 
@@ -162,14 +174,18 @@ def main():
                         out_file.write(line)
                         out_file.flush()  # Ensure the line is written immediately
 
-                ellaped_log = dt_log - dt_ref_log
-                ellapsed_now = dt_now - dt_ref_now
 
-                print("Final log date-time:", dt_log, "       ")
-                print("Final now date-time:", dt_now, "       ")
-                print("Ellapsed log date-time:", ellaped_log, "       ")
-                print("Ellapsed now date-time:", ellapsed_now, "       ")
-                print("                                            ")
+                if dt_found:
+                    ellaped_log = dt_log - dt_ref_log
+                    ellapsed_now = dt_now - dt_ref_now
+
+                    print("Final log date-time:", dt_log, "       ")
+                    print("Final now date-time:", dt_now, "       ")
+                    print("Ellapsed log date-time:", ellaped_log, "       ")
+                    print("Ellapsed now date-time:", ellapsed_now, "       ")
+                    print("                                            ")
+                else:
+                    print("ERROR: Lines with a valid date-time not found")
 
         except KeyboardInterrupt:
             sys.stdout.write("\033[E\033[E\033[E\033[E\033[E\033[E")

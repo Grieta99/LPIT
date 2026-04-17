@@ -1,37 +1,43 @@
-from datetime import datetime
-
 import time
 import os
 import sys
 
-
-def find_dt_pos(text):
-    pattern = r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}'
-
-    matches = re.finditer(pattern, text)
-    pos = [(match.start(), match.end()) for match in matches]
-
-    return pos
+version = "1.02"
 
 def main():
 
     print("-------------------------")
-    print("Live-file simulator ")
+    print("Live-file simulator " + version)
     print("-------------------------")
     print("")
+
+    user = os.getlogin()
 
     print("Environment:")
     if sys.platform == 'linux':
         print("- OS: Ubuntu")
     elif sys.platform == 'win32':
         print("- OS: Windows")
+    elif sys.platform == 'darwin':
+        print("- OS: MacOS")        
     else:
         print("- OS: unknown")
-        sys.exit()
+
+    print("- User:", user)
+
+    print("")
     
     inp_data_file = 'data_source.txt'
-    out_data_file = 'data_live.txt'
-
+    out_data_file = 'data_source_live.txt'
+    
+    if not os.path.exists(inp_data_file):
+        print("ERROR: File '" + inp_data_file + "' does not exist")
+        sys.exit()
+        
+    if os.path.getsize(inp_data_file) == 0:
+        print("ERROR: File '" + inp_data_file + "' is empty (size = 0 bytes)")   
+        sys.exit()    
+        
     print("- Source data file name: " + inp_data_file)
     print("- Live data file name: " + out_data_file)
     print("")
@@ -80,9 +86,6 @@ def main():
                 print("... script gracefully stopped")
             else:
                 print("... script finished")
-
-                
-                
 
 if __name__ == "__main__":
     main()

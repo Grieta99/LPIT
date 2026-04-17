@@ -5,10 +5,17 @@ import polars as pl
 from dash import Dash, dcc, html, Input, Output
 import plotly.graph_objects as go
 
-# First run sim-live-data.py to create the data_live.txt live file
+# Run sim-live-data.py first to create the live file 'data_source_live.txt'
 
-version = "1.01"
-data_file = "data_live.txt"
+# ============================================================
+# Links
+# ============================================================
+
+# https://docs.python.org/3/library/asyncio-queue.html
+# https://dash.plotly.com/dash-core-components/graph
+
+version = "1.03"
+data_file = "data_source_live.txt"
 
 n_cols = 10  # Number of columns in each data row
 agg_period = 5  # Number of rows to perform aggregation
@@ -17,15 +24,14 @@ agg_period = 5  # Number of rows to perform aggregation
 # Shared asyncio queue
 # ============================================================
 
-# A shared asyncio queue will be used to implement the producer-consumer process
-# https://docs.python.org/3/library/asyncio-queue.html
+# A shared asyncio queue will be used to implement the producer-consumer logic
 queue = asyncio.Queue()
 
 # ============================================================
 # Shared DataFrame
 # ============================================================
 
-# Create a shared empty DataFrame where each row contains a 10-values vector
+# Create a shared empty DataFrame where each row contains a 10-values vector,
 # each value beign a 5-seconds mean (float value) (this does not create data,
 # only creates the structure)
 agg_df = pl.DataFrame(
@@ -40,8 +46,8 @@ vector_list = [0.0] * 10
 # - Reads data from a live file -> Inserts data into the shared asyncio queue
 # ============================================================
 
-# - Read new lines from a live data file
-# - Every 5 lines (5 seconds) aggregate column-wise and adds the resulting vector
+# - Read new lines (data rows) from a live data file
+# - Every 5 lines (5 seconds) aggregates column-wise and adds the resulting vector
 #   to the shared queue
 async def tail_file_producer(path: str, data_queue: asyncio.Queue):
 
@@ -59,7 +65,7 @@ async def tail_file_producer(path: str, data_queue: asyncio.Queue):
         # Only process new lines (2 = os.SEEK_END)
         f.seek(0, 2)
 
-        # Initialize the buffer and iterate until is filled with 5 rows of data
+        # Initialize the buffer and iterate until is filled with 5 lines of data
         buffer = []
 
         while True:
@@ -69,10 +75,10 @@ async def tail_file_producer(path: str, data_queue: asyncio.Queue):
                 await asyncio.sleep(0.2)
                 continue
 
-            # Extract values from the read line
+            # Extract values from the new line
             values = [float(x) for x in line.strip().split(",")]
 
-            # Add values to the buffer
+            # Add vector of values to the buffer
             buffer.append(values)
 
             print("• Data row added to buffer:", values)

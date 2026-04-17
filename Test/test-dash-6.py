@@ -10,8 +10,8 @@ import polars as pl
 # Read data
 df = pl.read_csv('gapminder_unfiltered.csv')
 
-# Initialize the app
-app = Dash()
+# Initialize the Dash app
+app = Dash(__name__)
 
 # App layout
 app.layout = [

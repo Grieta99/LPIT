@@ -4,14 +4,14 @@ import polars as pl
 
 # ==================================
 # Dash example with gapminder2007 dataset @ https://raw.githubusercontent.com/plotly/datasets/master/gapminder2007.csv
-# - Basic grid table with Polars DataFrame
+# - Basic grid table fed with Polars DataFrame
 # ==================================
 
 # Read data
 df = pl.read_csv('gapminder2007.csv')
 
 # Initialize the app
-app = Dash()
+app = Dash(__name__)
 
 # App layout
 app.layout = [
