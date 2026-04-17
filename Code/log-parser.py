@@ -63,25 +63,14 @@ async def tail_file_producer(path: str, data_queue: asyncio.Queue) -> None:
     with open(path, "r", encoding="utf-8") as f:
 
         print(f"Opened: {path}")
-        f.seek(0, 2)  # Start at end — only process new lines
-        pos = f.tell()
 
         while True:
             line = f.readline()
 
-            if not line:
+            if line:
+                await data_queue.put(line)
+            else:
                 await asyncio.sleep(0.1)
-
-                # Detect file rotation / rewrite (log-sim.py opens with 'w')
-                current_size = file.stat().st_size
-                if current_size < pos:
-                    f.seek(0)
-                    pos = 0
-
-                continue
-
-            pos = f.tell()
-            await data_queue.put(line)
 
 # ============================================================
 # Consumer: queue → parse → DataFrame
@@ -116,8 +105,7 @@ async def consumer(data_queue: asyncio.Queue) -> None:
             log_df = pl.concat([log_df, new_row], how="vertical")
 
             label = LEVEL_LABEL.get(level, level)
-            if ("[SDAP" in f"[{component:<8}]"):
-                print(f"{ts_str}  [{component:<8}]  [{label}]  {message.strip()}")
+            print(f"{ts_str}  [{component:<8}]  [{label}]  {message.strip()}")
 
         data_queue.task_done()
 
