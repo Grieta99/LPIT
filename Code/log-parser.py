@@ -105,7 +105,8 @@ async def consumer(data_queue: asyncio.Queue) -> None:
             log_df = pl.concat([log_df, new_row], how="vertical")
 
             label = LEVEL_LABEL.get(level, level)
-            print(f"{ts_str}  [{component:<8}]  [{label}]  {message.strip()}")
+            if ("[SDAP" in f"[{component:<8}]"):
+                print(f"{ts_str}  [{component:<8}]  [{label}]  {message.strip()}")
 
         data_queue.task_done()
 
