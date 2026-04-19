@@ -43,6 +43,13 @@ log_df = pl.DataFrame(schema={
     "message":   pl.String,
 })
 
+# Obj. 4: aggregated bytes per (1s window, UE)
+ue_volume_df = pl.DataFrame(schema={
+    "window": pl.Datetime(time_unit="us"),
+    "ue":     pl.Int64,
+    "bytes":  pl.Int64,
+})
+
 # ============================================================
 # Producer: tail log file → queue
 # ============================================================
@@ -61,6 +68,8 @@ async def tail_file_producer(path: str, data_queue: asyncio.Queue) -> None:
         await asyncio.sleep(0.5)
 
     with open(path, "r", encoding="utf-8") as f:
+
+        f.seek(0, 2)  # start at end of file — only read new lines
 
         print(f"Opened: {path}")
 
@@ -83,8 +92,9 @@ async def consumer(data_queue: asyncio.Queue) -> None:
     """
     global log_df
 
+    FLUSH_EVERY = 200
+    log_buf = []
     lc = 0  # total lines received
-    pc = 0  # parsed (matched) lines
 
     while True:
         line = await data_queue.get()
@@ -92,23 +102,71 @@ async def consumer(data_queue: asyncio.Queue) -> None:
 
         m = LOG_PATTERN.match(line)
         if m:
-            pc += 1
             ts_str, component, level, message = m.groups()
             ts = datetime.fromisoformat(ts_str)
 
-            new_row = pl.DataFrame([{
+            log_buf.append({
                 "timestamp": ts,
                 "component": component,
                 "level":     level,
                 "message":   message.strip(),
-            }])
-            log_df = pl.concat([log_df, new_row], how="vertical")
+            })
 
             label = LEVEL_LABEL.get(level, level)
             if ("[SDAP" in f"[{component:<8}]"):
                 print(f"{ts_str}  [{component:<8}]  [{label}]  {message.strip()}")
 
+        if lc % FLUSH_EVERY == 0:
+            if log_buf:
+                log_df = pl.concat([log_df, pl.DataFrame(log_buf, schema=log_df.schema)], how="vertical")
+                log_buf = []
+            await asyncio.sleep(0)  # yield to event loop
+
         data_queue.task_done()
+
+# ============================================================
+# Obj. 4: Aggregator — every 1s, sum bytes per UE
+# ============================================================
+
+async def aggregator() -> None:
+    global ue_volume_df
+
+    last_processed = 0
+
+    while True:
+        await asyncio.sleep(1)
+
+        new_rows = log_df[last_processed:]
+        last_processed = len(log_df)
+
+        agg_rows = (
+            new_rows
+            .with_columns([
+                pl.col("message").str.extract(r'ue=(\d+)', 1).cast(pl.Int64).alias("ue"),
+                pl.col("message").str.extract(r'pdu_len=(\d+)', 1).cast(pl.Int64).alias("pdu_len"),
+            ])
+            .drop_nulls(["ue", "pdu_len"])
+        )
+
+        if len(agg_rows) == 0:
+            continue
+
+        agg = (
+            agg_rows
+            .with_columns(
+                (pl.col("timestamp").cast(pl.Int64) // 1_000_000 * 1_000_000)
+                .cast(pl.Datetime(time_unit="us"))
+                .alias("window")
+            )
+            .group_by(["window", "ue"])
+            .agg(pl.col("pdu_len").sum().alias("bytes"))
+            .sort(["window", "ue"])
+        )
+
+        ue_volume_df = pl.concat([ue_volume_df, agg], how="vertical")
+
+        for row in agg.iter_rows(named=True):
+            print(f"  ◆ Agg  window={row['window']}  ue={row['ue']}  bytes={row['bytes']:,}")
 
 # ============================================================
 # Main
@@ -122,20 +180,28 @@ async def main() -> None:
     print(f"Platform : {sys.platform}")
     print()
 
-    asyncio.create_task(tail_file_producer(LOG_FILE, queue))
-    asyncio.create_task(consumer(queue))
+    tasks = [
+        asyncio.create_task(tail_file_producer(LOG_FILE, queue)),
+        asyncio.create_task(consumer(queue)),
+        asyncio.create_task(aggregator()),
+    ]
 
     try:
         while True:
             await asyncio.sleep(1)
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, KeyboardInterrupt):
         pass
+    finally:
+        for t in tasks:
+            t.cancel()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\n... script gracefully stopped")
-        print(f"\nRows captured : {len(log_df)}")
-        if len(log_df) > 0:
-            print(log_df)
+        print(f"\nLog rows captured : {len(log_df)}")
+        print(f"Agg rows (1s/UE)  : {len(ue_volume_df)}")
+        if len(ue_volume_df) > 0:
+            print(f"Total bytes       : {ue_volume_df['bytes'].sum():,}")
+            print(ue_volume_df)
