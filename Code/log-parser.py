@@ -12,7 +12,7 @@ version = "1.00"
 # Configuration
 # ============================================================
 
-LOG_FILE = "cu-lan-ho.log"
+LOG_FILE = "cu-lan-ho-live.log"
 
 LEVEL_LABEL = {"I": "INFO ", "D": "DEBUG", "W": "WARN ", "E": "ERROR"}
 
