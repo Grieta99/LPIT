@@ -4,15 +4,20 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import polars as pl
+import math
 
-version = "1.00"
+import polars as pl
+from dash import Dash, dcc, html, Input, Output
+import plotly.graph_objects as go
+
+version = "1.01"
 
 # ============================================================
 # Configuration
 # ============================================================
 
 LOG_FILE = "cu-lan-ho-live.log"
+DASH_PORT = 8062
 
 LEVEL_LABEL = {"I": "INFO ", "D": "DEBUG", "W": "WARN ", "E": "ERROR"}
 
@@ -169,6 +174,82 @@ async def aggregator() -> None:
             print(f"  ◆ Agg  window={row['window']}  ue={row['ue']}  bytes={row['bytes']:,}")
 
 # ============================================================
+# Obj. 5: Dash app — volume per UE, 5s circular window
+# ============================================================
+
+N_SLOTS    = 5  # number of 1s windows shown at once
+UE_PALETTE = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
+
+app = Dash(__name__)
+
+# Layout: title, debug line, grouped bar chart, 1s refresh timer
+app.layout = html.Div([
+    html.H3("Volume per UE  —  5s window"),
+    html.Div(id="debug", style={"fontFamily": "monospace", "fontSize": "13px", "marginBottom": "8px"}),
+    dcc.Graph(id="vol-graph"),
+    dcc.Interval(id="interval", interval=1000, n_intervals=0),
+])
+
+@app.callback(
+    Output("vol-graph", "figure"),
+    Output("debug", "children"),
+    Input("interval", "n_intervals"),  # fires every 1s
+)
+def update_graph(_):
+    fig = go.Figure()
+
+    if len(ue_volume_df) > 0:
+        # Keep only the N_SLOTS most recent 1s windows (sliding window)
+        last_windows = sorted(ue_volume_df["window"].unique().to_list())[-N_SLOTS:]
+        view = ue_volume_df.filter(pl.col("window").is_in(last_windows))
+
+        # Only plot UEs that transferred at least 1 byte in the visible window
+        active_ues = sorted(
+            view.filter(pl.col("bytes") > 0)["ue"].unique().to_list()
+        )
+
+        x = [str(w)[11:19] for w in last_windows]  # HH:MM:SS labels
+
+        for i, ue_id in enumerate(active_ues):
+            ue_data = view.filter(pl.col("ue") == ue_id)
+            # Align bytes to the window order; 0 if this UE had no traffic in that window
+            y = [
+                ue_data.filter(pl.col("window") == w)["bytes"].sum()
+                for w in last_windows
+            ]
+            fig.add_trace(go.Bar(
+                x=x,
+                y=y,
+                name=f"UE {ue_id}",
+                marker_color=UE_PALETTE[i % len(UE_PALETTE)],
+            ))
+
+    # Switch to log scale when max/min ratio > 100x to avoid small UEs being invisible
+    all_bytes = ue_volume_df["bytes"] if len(ue_volume_df) > 0 else pl.Series([0])
+    b_max = all_bytes.max() or 1
+    b_min = all_bytes.filter(all_bytes > 0).min() or 1
+    use_log = b_max > 100 * b_min
+
+    # Fix Y range based on all data seen so far to prevent axis jumping on each refresh
+    yaxis_range = (
+        [math.log10(max(b_min * 0.5, 1)), math.log10(b_max * 2)]
+        if use_log else
+        [0, b_max * 1.1]
+    )
+
+    fig.update_layout(
+        barmode="group",
+        xaxis_title="Time",
+        yaxis_title="Bytes / 1s",
+        yaxis_type="log" if use_log else "linear",
+        yaxis_range=yaxis_range,
+        legend_title="UE",
+    )
+
+    debug = f"log rows: {len(log_df)}  |  agg rows: {len(ue_volume_df)}"
+    return fig, debug
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -176,8 +257,9 @@ async def main() -> None:
     print("─" * 60)
     print(f"srsRAN CU Log Reader  v{version}")
     print("─" * 60)
-    print(f"Log file : {LOG_FILE}")
-    print(f"Platform : {sys.platform}")
+    print(f"Log file  : {LOG_FILE}")
+    print(f"Platform  : {sys.platform}")
+    print(f"Dashboard : http://127.0.0.1:{DASH_PORT}")
     print()
 
     tasks = [
@@ -187,8 +269,7 @@ async def main() -> None:
     ]
 
     try:
-        while True:
-            await asyncio.sleep(1)
+        await asyncio.to_thread(app.run, host="127.0.0.1", port=DASH_PORT, debug=False, use_reloader=False)
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
@@ -199,9 +280,14 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n... script gracefully stopped")
-        print(f"\nLog rows captured : {len(log_df)}")
-        print(f"Agg rows (1s/UE)  : {len(ue_volume_df)}")
-        if len(ue_volume_df) > 0:
-            print(f"Total bytes       : {ue_volume_df['bytes'].sum():,}")
-            print(ue_volume_df)
+        pass
+
+    print("\n... script gracefully stopped")
+    print(f"\nLog rows captured : {len(log_df)}")
+    print(f"Agg rows (1s/UE)  : {len(ue_volume_df)}")
+    if len(ue_volume_df) > 0:
+        print(f"Total bytes       : {ue_volume_df['bytes'].sum():,}")
+        print(ue_volume_df)
+
+    import os
+    os._exit(0)
