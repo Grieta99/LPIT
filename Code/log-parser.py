@@ -24,12 +24,12 @@ LEVEL_LABEL = {"I": "INFO ", "D": "DEBUG", "W": "WARN ", "E": "ERROR"}
 # Pattern for a log line header:
 #   TIMESTAMP [COMPONENT] [LEVEL] MESSAGE
 #   2026-01-19T08:55:05.524757 [CU      ] [I] Built in Release mode...
-LOG_PATTERN = re.compile(
-    r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6})'  # 1: timestamp
-    r'\s+\[([A-Z0-9_-]+)\s*\]'                          # 2: component
-    r'\s+\[([IDWE])\]'                                  # 3: level
-    r'\s+(.*)'                                           # 4: message
+
+LOG_PATTERN = re.compile(#mascara para extraccion de datos lives — solo DL SDAP
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+).*?\[SDAP\s*\].*?ue=(\d+).*?DL: TX PDU.*?pdu_len=(\d+)"
 )
+
+# ^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6})\s+\[([SDAP\s*]+)\s*\]\s+\[([IDWE])\]\s+(.*)
 
 # ============================================================
 # Shared asyncio queue
@@ -42,17 +42,16 @@ queue: asyncio.Queue = asyncio.Queue()
 # ============================================================
 
 log_df = pl.DataFrame(schema={
-    "timestamp": pl.Datetime(time_unit="us"),
-    "component": pl.String,
-    "level":     pl.String,
-    "message":   pl.String,
+    "timestamp": pl.Datetime(time_unit="us"), ##instante del paq
+    "ue": pl.Int32,
+    "pdu_len":     pl.Int32,  # DL only
 })
 
 # Obj. 4: aggregated bytes per (1s window, UE)
 ue_volume_df = pl.DataFrame(schema={
     "window": pl.Datetime(time_unit="us"),
-    "ue":     pl.Int64,
-    "bytes":  pl.Int64,
+    "ue":     pl.Int32,
+    "bytes":  pl.Int32,
 })
 
 # ============================================================
@@ -96,82 +95,89 @@ async def consumer(data_queue: asyncio.Queue) -> None:
     log header pattern, and appends them to the shared Polars DataFrame.
     """
     global log_df
+    global ue_volume_df
+    
+    #print("consumer_1")
 
     FLUSH_EVERY = 200
+    Tant        = datetime(2000, 4, 24, 12, 0, 0)
+    Tant_pq     = None   # Obj6: set on first packet, then save every 30s log time
+    last_processed = 0
     log_buf = []
     lc = 0  # total lines received
 
     while True:
+        #print("consumer_2")
         line = await data_queue.get()
         lc += 1
+  
 
-        m = LOG_PATTERN.match(line)
+        m = LOG_PATTERN.match(line)###modificar patron de line
         if m:
-            ts_str, component, level, message = m.groups()
+            ts_str, ue, pdu_len = m.groups()
             ts = datetime.fromisoformat(ts_str)
 
             log_buf.append({
                 "timestamp": ts,
-                "component": component,
-                "level":     level,
-                "message":   message.strip(),
+                "ue": int(ue),
+                "pdu_len":     int(pdu_len),
             })
+            #Obj2 SDAP DL
+            print("AGG1", f"{ts_str}  [{ue}]  [{pdu_len}] ") #AGG Verifico los datos leidos
+            
+            #Obj4
+            if (abs((ts - Tant).total_seconds()) >= 1): #AGG Compara el tiempo actual con el tiempo en el que se cargo el ultimo valor al dataframe de salida
+                Tant = ts
+                print("1S")
+                # Flush buffer so log_df is up to date before aggregating
+                if log_buf:
+                    log_df = pl.concat([log_df, pl.DataFrame(log_buf, schema=log_df.schema)], how="vertical")
+                    log_buf = []
+                try:
+                    new_rows = log_df[last_processed:]  # slice from last processed onward
+                    last_processed = len(log_df)
 
-            label = LEVEL_LABEL.get(level, level)
-            if ("[SDAP" in f"[{component:<8}]"):
-                print(f"{ts_str}  [{component:<8}]  [{label}]  {message.strip()}")
+                    if len(new_rows) > 0:
+                        agg = (
+                            new_rows
+                            .with_columns(
+                                (pl.col("timestamp").cast(pl.Int64) // 1_000_000 * 1_000_000)
+                                .cast(pl.Datetime(time_unit="us"))
+                                .alias("window")
+                            )
+                            .group_by(["window", "ue"])
+                            .agg(pl.col("pdu_len").sum().alias("bytes"))
+                            .sort(["window", "ue"])
+                        )
+
+                        ue_volume_df = pl.concat([ue_volume_df, agg], how="vertical")
+
+                        for row in agg.iter_rows(named=True):
+                            print(f"  ◆ Agg  window={row['window']}  ue={row['ue']}  bytes={row['bytes']:,}")
+                except Exception as e:
+                    print(f"Don't worry be happy (aggregator): {e}")
+
+            #Obj6: cada 30s de log time guardar ue_volume_df en Parquet
+            if Tant_pq is None:
+                Tant_pq = ts  # anchor to first real log timestamp
+            elif abs((ts - Tant_pq).total_seconds()) >= 30:
+                Tant_pq = ts
+                if len(ue_volume_df) > 0:
+                    try:
+                        fname = f"ue_volumes_{ts.strftime('%Y%m%dT%H%M%S')}.parquet"
+                        ue_volume_df.write_parquet(fname)
+                        print(f"  ▶ Parquet saved: {fname}  ({len(ue_volume_df)} rows)")
+                    except Exception as e:
+                        print(f"Parquet save error: {e}")
 
         if lc % FLUSH_EVERY == 0:
             if log_buf:
                 log_df = pl.concat([log_df, pl.DataFrame(log_buf, schema=log_df.schema)], how="vertical")
                 log_buf = []
-            await asyncio.sleep(0)  # yield to event loop
+            await asyncio.sleep(0.1)  # yield to event loop
 
         data_queue.task_done()
 
-# ============================================================
-# Obj. 4: Aggregator — every 1s, sum bytes per UE
-# ============================================================
-
-async def aggregator() -> None:
-    global ue_volume_df
-
-    last_processed = 0
-
-    while True:
-        await asyncio.sleep(1)
-
-        new_rows = log_df[last_processed:]
-        last_processed = len(log_df)
-
-        agg_rows = (
-            new_rows
-            .with_columns([
-                pl.col("message").str.extract(r'ue=(\d+)', 1).cast(pl.Int64).alias("ue"),
-                pl.col("message").str.extract(r'pdu_len=(\d+)', 1).cast(pl.Int64).alias("pdu_len"),
-            ])
-            .drop_nulls(["ue", "pdu_len"])
-        )
-
-        if len(agg_rows) == 0:
-            continue
-
-        agg = (
-            agg_rows
-            .with_columns(
-                (pl.col("timestamp").cast(pl.Int64) // 1_000_000 * 1_000_000)
-                .cast(pl.Datetime(time_unit="us"))
-                .alias("window")
-            )
-            .group_by(["window", "ue"])
-            .agg(pl.col("pdu_len").sum().alias("bytes"))
-            .sort(["window", "ue"])
-        )
-
-        ue_volume_df = pl.concat([ue_volume_df, agg], how="vertical")
-
-        for row in agg.iter_rows(named=True):
-            print(f"  ◆ Agg  window={row['window']}  ue={row['ue']}  bytes={row['bytes']:,}")
 
 # ============================================================
 # Obj. 5: Dash app — volume per UE, 5s circular window
@@ -240,7 +246,7 @@ def update_graph(_):
     fig.update_layout(
         barmode="group",
         xaxis_title="Time",
-        yaxis_title="Bytes / 1s",
+        yaxis_title="DL Bytes / 1s (SDAP)",
         yaxis_type="log" if use_log else "linear",
         yaxis_range=yaxis_range,
         legend_title="UE",
@@ -265,7 +271,6 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(tail_file_producer(LOG_FILE, queue)),
         asyncio.create_task(consumer(queue)),
-        asyncio.create_task(aggregator()),
     ]
 
     try:
@@ -286,7 +291,7 @@ if __name__ == "__main__":
     print(f"\nLog rows captured : {len(log_df)}")
     print(f"Agg rows (1s/UE)  : {len(ue_volume_df)}")
     if len(ue_volume_df) > 0:
-        print(f"Total bytes       : {ue_volume_df['bytes'].sum():,}")
+        print(f"Total DL bytes    : {ue_volume_df['bytes'].sum():,}")
         print(ue_volume_df)
 
     import os
